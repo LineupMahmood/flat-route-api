@@ -150,20 +150,41 @@ def get_flat_waypoint_nodes(origin, destination, radius_factor=3.0):
     print(f"Found {len(flat_nodes)} flat nodes, sampled {len(sampled)} waypoints")
     return sampled
 
+def has_loop(route):
+    """Detect routes that visit the same node twice — waypoint artifacts."""
+    seen = set()
+    for coord in route["coordinates"]:
+        key = (round(coord["lat"], 5), round(coord["lng"], 5))
+        if key in seen:
+            return True
+        seen.add(key)
+    return False
+
 def deduplicate_routes(routes):
+    # First remove looping routes
+    routes = [r for r in routes if not has_loop(r)]
+    
     unique = []
     for r in routes:
         coords = r["coordinates"]
         if len(coords) < 2:
             continue
-        mid = coords[len(coords)//2]
-        is_dup = any(
-            math.sqrt(
-                (mid["lat"] - u["coordinates"][len(u["coordinates"])//2]["lat"]) ** 2 +
-                (mid["lng"] - u["coordinates"][len(u["coordinates"])//2]["lng"]) ** 2
-            ) * 111000 < 50
-            for u in unique
-        )
+        # Compare using multiple points along the route, not just midpoint
+        sample_indices = [len(coords)//4, len(coords)//2, 3*len(coords)//4]
+        is_dup = False
+        for u in unique:
+            u_coords = u["coordinates"]
+            matches = 0
+            for idx in sample_indices:
+                if idx < len(coords) and idx < len(u_coords):
+                    dlat = coords[idx]["lat"] - u_coords[idx]["lat"]
+                    dlng = coords[idx]["lng"] - u_coords[idx]["lng"]
+                    dist_m = math.sqrt(dlat**2 + dlng**2) * 111000
+                    if dist_m < 80:
+                        matches += 1
+            if matches >= 2:
+                is_dup = True
+                break
         if not is_dup:
             unique.append(r)
     return unique
