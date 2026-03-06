@@ -89,8 +89,8 @@ def get_route_via_waypoint(origin, destination, waypoint_node, weight):
 
 def get_local_waypoint_nodes(origin, destination):
     """
-    Try a small grid of real graph nodes near the midpoint and
-    near each endpoint. No city-wide scan — fast and local.
+    Generate waypoint candidates in a cross pattern at multiple radii.
+    Wider offsets find flat detour corridors (like Octavia Blvd).
     """
     slat = G.nodes[origin]["y"]
     slng = G.nodes[origin]["x"]
@@ -101,21 +101,24 @@ def get_local_waypoint_nodes(origin, destination):
         ((elat - slat) * 111000) ** 2 +
         ((elng - slng) * 111000 * math.cos(math.radians(slat))) ** 2
     )
-    offset = min(direct_dist_m * 0.4, 400) / 111000  # degrees
 
     mid_lat = (slat + elat) / 2
     mid_lng = (slng + elng) / 2
 
-    candidate_coords = [
-        (mid_lat + offset, mid_lng),
-        (mid_lat - offset, mid_lng),
-        (mid_lat, mid_lng + offset),
-        (mid_lat, mid_lng - offset),
-        (mid_lat + offset, mid_lng + offset),
-        (mid_lat + offset, mid_lng - offset),
-        (mid_lat - offset, mid_lng + offset),
-        (mid_lat - offset, mid_lng - offset),
-    ]
+    candidate_coords = []
+    # Try 3 radii: 30%, 60%, 100% of direct distance
+    for factor in [0.3, 0.6, 1.0]:
+        offset = max(direct_dist_m * factor, 200) / 111000
+        candidate_coords += [
+            (mid_lat + offset, mid_lng),
+            (mid_lat - offset, mid_lng),
+            (mid_lat, mid_lng + offset),
+            (mid_lat, mid_lng - offset),
+            (slat + offset, slng),
+            (slat, slng + offset),
+            (elat + offset, elng),
+            (elat, elng + offset),
+        ]
 
     nodes = []
     for lat, lng in candidate_coords:
@@ -138,30 +141,31 @@ def has_loop(route):
     return False
 
 def deduplicate_routes(routes):
-    # First remove looping routes
     routes = [r for r in routes if not has_loop(r)]
-    
     unique = []
     for r in routes:
         coords = r["coordinates"]
         if len(coords) < 2:
             continue
-        # Compare using multiple points along the route, not just midpoint
-        sample_indices = [len(coords)//4, len(coords)//2, 3*len(coords)//4]
         is_dup = False
         for u in unique:
-            u_coords = u["coordinates"]
-            matches = 0
-            for idx in sample_indices:
-                if idx < len(coords) and idx < len(u_coords):
-                    dlat = coords[idx]["lat"] - u_coords[idx]["lat"]
-                    dlng = coords[idx]["lng"] - u_coords[idx]["lng"]
-                    dist_m = math.sqrt(dlat**2 + dlng**2) * 111000
-                    if dist_m < 80:
-                        matches += 1
-            if matches >= 2:
+            # Same distance within 0.05mi AND same avg grade within 0.5% = duplicate
+            same_dist = abs(r["distanceInMiles"] - u["distanceInMiles"]) < 0.05
+            same_grade = abs(r["avgGradePct"] - u["avgGradePct"]) < 0.5
+            if same_dist and same_grade:
                 is_dup = True
                 break
+            # Also check midpoint proximity
+            u_coords = u["coordinates"]
+            mid = len(coords) // 2
+            u_mid = len(u_coords) // 2
+            if mid < len(coords) and u_mid < len(u_coords):
+                dlat = coords[mid]["lat"] - u_coords[u_mid]["lat"]
+                dlng = coords[mid]["lng"] - u_coords[u_mid]["lng"]
+                dist_m = math.sqrt(dlat**2 + dlng**2) * 111000
+                if dist_m < 40:
+                    is_dup = True
+                    break
         if not is_dup:
             unique.append(r)
     return unique
