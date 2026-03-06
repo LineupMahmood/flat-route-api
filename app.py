@@ -57,6 +57,8 @@ def route_to_coords(route):
 
 def get_route_via_waypoint(origin, destination, waypoint_node, weight):
     try:
+        if waypoint_node == origin or waypoint_node == destination:
+            return None
         leg1 = ox.routing.shortest_path(G, origin, waypoint_node, weight=weight)
         leg2 = ox.routing.shortest_path(G, waypoint_node, destination, weight=weight)
         if leg1 and leg2:
@@ -65,48 +67,48 @@ def get_route_via_waypoint(origin, destination, waypoint_node, weight):
         pass
     return None
 
-def midpoint_coord(n1, n2):
-    lat = (G.nodes[n1]["y"] + G.nodes[n2]["y"]) / 2
-    lng = (G.nodes[n1]["x"] + G.nodes[n2]["x"]) / 2
-    return lat, lng
-
 def generate_waypoint_nodes(origin, destination):
     slat, slng = G.nodes[origin]["y"], G.nodes[origin]["x"]
     elat, elng = G.nodes[destination]["y"], G.nodes[destination]["x"]
-    
+
     lat_diff = elat - slat
     lng_diff = elng - slng
     dist = math.sqrt(lat_diff**2 + lng_diff**2)
     if dist == 0:
         return []
-    
+
     perp_lat = -lng_diff / dist
     perp_lng = lat_diff / dist
-    
+
+    # Scale offsets to the actual distance between points
+    base_offset = dist * 0.5
+    offsets = [base_offset, base_offset * 2, -base_offset, -base_offset * 2]
+
     waypoints = []
-    
+
     # L-shaped corners
     waypoints.append((slat, elng))
     waypoints.append((elat, slng))
-    
+
     # Midpoint perpendicular sweeps
     mid_lat = (slat + elat) / 2
     mid_lng = (slng + elng) / 2
-    for offset in [0.003, 0.006, -0.003, -0.006]:
+    for offset in offsets:
         waypoints.append((mid_lat + perp_lat * offset, mid_lng + perp_lng * offset))
-    
-    # Quarter/three-quarter points
+
+    # Quarter and three-quarter points
     for fraction in [0.25, 0.75]:
         base_lat = slat + lat_diff * fraction
         base_lng = slng + lng_diff * fraction
-        for offset in [0.003, -0.003]:
+        for offset in [base_offset, -base_offset]:
             waypoints.append((base_lat + perp_lat * offset, base_lng + perp_lng * offset))
 
     nodes = []
     for lat, lng in waypoints:
         try:
             node = ox.distance.nearest_nodes(G, lng, lat)
-            nodes.append(node)
+            if node not in nodes:
+                nodes.append(node)
         except:
             pass
     return nodes
@@ -125,7 +127,7 @@ def deduplicate_routes(routes):
             dlat = mid["lat"] - u_mid["lat"]
             dlng = mid["lng"] - u_mid["lng"]
             dist_m = math.sqrt(dlat**2 + dlng**2) * 111000
-            if dist_m < 80:
+            if dist_m < 40:
                 is_dup = True
                 break
         if not is_dup:
@@ -168,21 +170,24 @@ def get_route():
         unique_routes = deduplicate_routes(all_routes)
         unique_routes.sort(key=lambda r: r["elevationGainFt"])
 
-        if len(unique_routes) < 2:
-            return jsonify({"error": "Not enough routes found"}), 500
+        if len(unique_routes) < 1:
+            return jsonify({"error": "No routes found"}), 500
 
-        # Filter out routes more than 2x the shortest distance
+        # Filter out routes more than 2.5x the shortest distance
         min_dist = min(r["distanceInMiles"] for r in unique_routes)
         min_gain = unique_routes[0]["elevationGainFt"]
-        filtered = [r for r in unique_routes if r["distanceInMiles"] <= min_dist * 2.0 or r["elevationGainFt"] <= min_gain * 0.6]
+        filtered = [r for r in unique_routes
+                    if r["distanceInMiles"] <= min_dist * 2.5
+                    or r["elevationGainFt"] <= min_gain * 0.6]
 
         flat = filtered[0]
         short = min(filtered, key=lambda r: r["distanceInMiles"])
 
+        print(f"✅ Returning {len(filtered)} routes")
         return jsonify({
             "flatRoute": flat,
             "shortRoute": short,
-            "allRoutes": filtered[:5]
+            "allRoutes": filtered[:6]
         })
 
     except Exception as e:
