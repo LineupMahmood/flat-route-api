@@ -87,81 +87,45 @@ def get_route_via_waypoint(origin, destination, waypoint_node, weight):
         pass
     return None
 
-def get_flat_waypoint_nodes(origin, destination, radius_factor=3.0):
+def get_local_waypoint_nodes(origin, destination):
     """
-    General solution: find actually flat nodes from the graph within
-    a search radius, then use those as waypoints. Works for any A->B.
+    Try a small grid of real graph nodes near the midpoint and
+    near each endpoint. No city-wide scan — fast and local.
     """
     slat = G.nodes[origin]["y"]
     slng = G.nodes[origin]["x"]
     elat = G.nodes[destination]["y"]
     elng = G.nodes[destination]["x"]
 
-    # Calculate direct distance in meters
     direct_dist_m = math.sqrt(
         ((elat - slat) * 111000) ** 2 +
         ((elng - slng) * 111000 * math.cos(math.radians(slat))) ** 2
     )
+    offset = min(direct_dist_m * 0.4, 400) / 111000  # degrees
 
-    # Search radius — larger radius finds more detour options
-    search_radius_m = max(direct_dist_m * radius_factor, 500)
+    mid_lat = (slat + elat) / 2
+    mid_lng = (slng + elng) / 2
 
-    # Center of search area
-    center_lat = (slat + elat) / 2
-    center_lng = (slng + elng) / 2
+    candidate_coords = [
+        (mid_lat + offset, mid_lng),
+        (mid_lat - offset, mid_lng),
+        (mid_lat, mid_lng + offset),
+        (mid_lat, mid_lng - offset),
+        (mid_lat + offset, mid_lng + offset),
+        (mid_lat + offset, mid_lng - offset),
+        (mid_lat - offset, mid_lng + offset),
+        (mid_lat - offset, mid_lng - offset),
+    ]
 
-    # Find all flat edges within the search radius
-    # A flat edge has grade_abs < 0.04 (4%)
-    flat_nodes = set()
-    for u, v, k, data in G.edges(keys=True, data=True):
-        grade_abs = float(data.get("grade_abs", 1.0))
-        if grade_abs < 0.04:  # Only very flat edges
-            for node in [u, v]:
-                node_lat = G.nodes[node]["y"]
-                node_lng = G.nodes[node]["x"]
-                dist = math.sqrt(
-                    ((node_lat - center_lat) * 111000) ** 2 +
-                    ((node_lng - center_lng) * 111000 * math.cos(math.radians(center_lat))) ** 2
-                )
-                if dist <= search_radius_m:
-                    flat_nodes.add(node)
-
-    # Remove origin and destination
-    flat_nodes.discard(origin)
-    flat_nodes.discard(destination)
-
-    if not flat_nodes:
-        return []
-
-    # Sample flat nodes spread across the search area
-    # Divide area into a grid and pick the flattest node from each cell
-    grid_size = 5
-    cells = {}
-    for node in flat_nodes:
-        node_lat = G.nodes[node]["y"]
-        node_lng = G.nodes[node]["x"]
-        cell_lat = int((node_lat - slat) / ((elat - slat + 0.001) / grid_size))
-        cell_lng = int((node_lng - slng) / ((elng - slng + 0.001) / grid_size))
-        cell_key = (cell_lat, cell_lng)
-        if cell_key not in cells:
-            cells[cell_key] = node
-        else:
-            # Keep the flatter node
-            existing = cells[cell_key]
-            existing_grade = min(
-                float(G.get_edge_data(existing, nb, 0).get("grade_abs", 1.0))
-                for nb in G.neighbors(existing)
-            ) if list(G.neighbors(existing)) else 1.0
-            new_grade = min(
-                float(G.get_edge_data(node, nb, 0).get("grade_abs", 1.0))
-                for nb in G.neighbors(node)
-            ) if list(G.neighbors(node)) else 1.0
-            if new_grade < existing_grade:
-                cells[cell_key] = node
-
-    sampled = list(cells.values())
-    print(f"Found {len(flat_nodes)} flat nodes, sampled {len(sampled)} waypoints")
-    return sampled
+    nodes = []
+    for lat, lng in candidate_coords:
+        try:
+            n = ox.distance.nearest_nodes(G, lng, lat)
+            if n not in (origin, destination) and n not in nodes:
+                nodes.append(n)
+        except:
+            pass
+    return nodes
 
 def has_loop(route):
     """Detect routes that visit the same node twice — waypoint artifacts."""
@@ -226,7 +190,7 @@ def get_route():
                 all_routes.append(analyze_route(r))
 
         # Route through actual flat nodes from the graph
-        flat_waypoints = get_flat_waypoint_nodes(origin, destination)
+        flat_waypoints = get_local_waypoint_nodes(origin, destination)
         for wp_node in flat_waypoints:
             for weight in ["impedance_high", "impedance_max"]:
                 r = get_route_via_waypoint(origin, destination, wp_node, weight)
