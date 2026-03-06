@@ -28,10 +28,8 @@ G = ox.load_graphml(filepath=GRAPHML_PATH)
 for u, v, k, data in G.edges(keys=True, data=True):
     grade = float(data.get("grade_abs", 0))
     length = float(data.get("length", 0))
-    data["impedance_low"]    = length * (1 + 5   * grade ** 2)
-    data["impedance_medium"] = length * (1 + 20  * grade ** 2)
-    data["impedance_high"]   = length * (1 + 50  * grade ** 2)
-    data["impedance_max"]    = length * (1 + 100 * grade ** 2)
+    data["impedance_high"] = length * (1 + 50  * grade ** 2)
+    data["impedance_max"]  = length * (1 + 100 * grade ** 2)
 
 print("Network ready. Server starting...")
 
@@ -44,14 +42,10 @@ def route_to_coords(route):
         edge = edge_data[0] if edge_data else {}
         length = float(edge.get("length", 0))
         grade = float(edge.get("grade", 0))
-        rise = length * grade
-        if rise > 0:
-            total_gain += rise
+        if length * grade > 0:
+            total_gain += length * grade
         total_length += length
-    coords = []
-    for node in route:
-        node_data = G.nodes[node]
-        coords.append({"lat": node_data["y"], "lng": node_data["x"]})
+    coords = [{"lat": G.nodes[n]["y"], "lng": G.nodes[n]["x"]} for n in route]
     return {
         "coordinates": coords,
         "distanceInMiles": round(total_length / 1609.34, 2),
@@ -60,7 +54,7 @@ def route_to_coords(route):
 
 def get_route_via_waypoint(origin, destination, waypoint_node, weight):
     try:
-        if waypoint_node == origin or waypoint_node == destination:
+        if waypoint_node in (origin, destination):
             return None
         leg1 = ox.routing.shortest_path(G, origin, waypoint_node, weight=weight)
         leg2 = ox.routing.shortest_path(G, waypoint_node, destination, weight=weight)
@@ -73,7 +67,6 @@ def get_route_via_waypoint(origin, destination, waypoint_node, weight):
 def generate_waypoint_nodes(origin, destination):
     slat, slng = G.nodes[origin]["y"], G.nodes[origin]["x"]
     elat, elng = G.nodes[destination]["y"], G.nodes[destination]["x"]
-
     lat_diff = elat - slat
     lng_diff = elng - slng
     dist = math.sqrt(lat_diff**2 + lng_diff**2)
@@ -83,29 +76,17 @@ def generate_waypoint_nodes(origin, destination):
     perp_lat = -lng_diff / dist
     perp_lng = lat_diff / dist
 
-    waypoints = []
-
-    # Standard L-shaped corners
-    waypoints.append((slat, elng))
-    waypoints.append((elat, slng))
-
-    # Extended corners — go PAST the destination to find routes like Octavia
-    # These force the algorithm to explore paths that detour beyond the bounding box
-    for extend in [1.5, 2.0, 2.5]:
-        extended_lat = slat + lat_diff * extend
-        extended_lng = slng + lng_diff * extend
-        waypoints.append((slat, extended_lng))   # same start lat, extended dest lng
-        waypoints.append((extended_lat, slng))   # extended lat, same start lng
-        waypoints.append((extended_lat, elng))   # extended lat, dest lng
-        waypoints.append((elat, extended_lng))   # dest lat, extended lng
-
-    # Perpendicular sweeps at multiple fractions along the path
-    base_offset = dist * 0.5
-    for fraction in [0.25, 0.5, 0.75]:
-        base_lat = slat + lat_diff * fraction
-        base_lng = slng + lng_diff * fraction
-        for offset in [base_offset, base_offset*2, -base_offset, -base_offset*2]:
-            waypoints.append((base_lat + perp_lat * offset, base_lng + perp_lng * offset))
+    waypoints = [
+        # L-shaped corners
+        (slat, elng),
+        (elat, slng),
+        # Extended corners past destination
+        (slat + lat_diff * 1.5, slng),
+        (slat, slng + lng_diff * 1.5),
+        # Midpoint perpendicular sweeps
+        ((slat+elat)/2 + perp_lat*dist*0.5, (slng+elng)/2 + perp_lng*dist*0.5),
+        ((slat+elat)/2 - perp_lat*dist*0.5, (slng+elng)/2 - perp_lng*dist*0.5),
+    ]
 
     nodes = []
     for lat, lng in waypoints:
@@ -124,16 +105,11 @@ def deduplicate_routes(routes):
         if len(coords) < 2:
             continue
         mid = coords[len(coords)//2]
-        is_dup = False
-        for u in unique:
-            u_coords = u["coordinates"]
-            u_mid = u_coords[len(u_coords)//2]
-            dlat = mid["lat"] - u_mid["lat"]
-            dlng = mid["lng"] - u_mid["lng"]
-            dist_m = math.sqrt(dlat**2 + dlng**2) * 111000
-            if dist_m < 40:
-                is_dup = True
-                break
+        is_dup = any(
+            math.sqrt((mid["lat"]-u["coordinates"][len(u["coordinates"])//2]["lat"])**2 +
+                      (mid["lng"]-u["coordinates"][len(u["coordinates"])//2]["lng"])**2) * 111000 < 40
+            for u in unique
+        )
         if not is_dup:
             unique.append(r)
     return unique
@@ -155,15 +131,12 @@ def get_route():
 
         all_routes = []
 
-        # Base routes with all penalty levels
-        for weight in ["impedance_low", "impedance_medium", "impedance_high", "impedance_max", "length"]:
+        for weight in ["impedance_high", "impedance_max", "length"]:
             r = ox.routing.shortest_path(G, origin, destination, weight=weight)
             if r:
                 all_routes.append(route_to_coords(r))
 
-        # Waypoint routes
-        waypoint_nodes = generate_waypoint_nodes(origin, destination)
-        for wp_node in waypoint_nodes:
+        for wp_node in generate_waypoint_nodes(origin, destination):
             for weight in ["impedance_high", "impedance_max"]:
                 r = get_route_via_waypoint(origin, destination, wp_node, weight)
                 if r:
@@ -172,10 +145,9 @@ def get_route():
         unique_routes = deduplicate_routes(all_routes)
         unique_routes.sort(key=lambda r: r["elevationGainFt"])
 
-        if len(unique_routes) < 1:
+        if not unique_routes:
             return jsonify({"error": "No routes found"}), 500
 
-        # Allow routes up to 3x shortest distance if they have lower elevation
         min_dist = min(r["distanceInMiles"] for r in unique_routes)
         min_gain = unique_routes[0]["elevationGainFt"]
         filtered = [r for r in unique_routes
