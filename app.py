@@ -28,28 +28,41 @@ G = ox.load_graphml(filepath=GRAPHML_PATH)
 for u, v, k, data in G.edges(keys=True, data=True):
     grade = float(data.get("grade_abs", 0))
     length = float(data.get("length", 0))
+    # Penalize steep segments exponentially — a 15% grade is much harder than 5%
     data["impedance_high"] = length * (1 + 50  * grade ** 2)
     data["impedance_max"]  = length * (1 + 100 * grade ** 2)
 
 print("Network ready. Server starting...")
 
-def route_to_coords(route):
+def analyze_route(route):
     total_gain = 0
     total_length = 0
+    grades = []
     for i in range(len(route) - 1):
         u, v = route[i], route[i+1]
         edge_data = G.get_edge_data(u, v)
         edge = edge_data[0] if edge_data else {}
         length = float(edge.get("length", 0))
         grade = float(edge.get("grade", 0))
+        grade_abs = abs(float(edge.get("grade_abs", grade)))
         if length * grade > 0:
             total_gain += length * grade
         total_length += length
+        if length > 0:
+            grades.append(grade_abs)
+
+    max_grade = max(grades) if grades else 0
+    avg_grade = sum(grades) / len(grades) if grades else 0
+
     coords = [{"lat": G.nodes[n]["y"], "lng": G.nodes[n]["x"]} for n in route]
     return {
         "coordinates": coords,
         "distanceInMiles": round(total_length / 1609.34, 2),
-        "elevationGainFt": round(total_gain * 3.281, 1)
+        "elevationGainFt": round(total_gain * 3.281, 1),
+        "maxGradePct": round(max_grade * 100, 1),
+        "avgGradePct": round(avg_grade * 100, 1),
+        # Difficulty score: combo of avg grade and max grade
+        "_difficulty": avg_grade * 0.7 + max_grade * 0.3
     }
 
 def get_route_via_waypoint(origin, destination, waypoint_node, weight):
@@ -78,15 +91,12 @@ def generate_waypoint_nodes(origin, destination):
 
     waypoints = []
 
-    # L-shaped corners at start lat extended east/west at multiple distances
-    # This forces routes like "go east on Union then south on Octavia"
     for extend in [1.0, 2.0, 3.0, 4.0]:
-        waypoints.append((slat, slng + lng_diff * extend))   # extend east/west from start
-        waypoints.append((elat, slng + lng_diff * extend))   # extend east/west to dest lat
-        waypoints.append((slat + lat_diff * extend, slng))   # extend north/south from start
-        waypoints.append((slat + lat_diff * extend, elng))   # extend north/south to dest lng
+        waypoints.append((slat, slng + lng_diff * extend))
+        waypoints.append((elat, slng + lng_diff * extend))
+        waypoints.append((slat + lat_diff * extend, slng))
+        waypoints.append((slat + lat_diff * extend, elng))
 
-    # Perpendicular sweeps at midpoint
     for offset in [dist * 0.5, dist * 1.0, -dist * 0.5, -dist * 1.0]:
         mid_lat = (slat + elat) / 2
         mid_lng = (slng + elng) / 2
@@ -138,30 +148,34 @@ def get_route():
         for weight in ["impedance_high", "impedance_max", "length"]:
             r = ox.routing.shortest_path(G, origin, destination, weight=weight)
             if r:
-                all_routes.append(route_to_coords(r))
+                all_routes.append(analyze_route(r))
 
         for wp_node in generate_waypoint_nodes(origin, destination):
             for weight in ["impedance_high", "impedance_max"]:
                 r = get_route_via_waypoint(origin, destination, wp_node, weight)
                 if r:
-                    all_routes.append(route_to_coords(r))
+                    all_routes.append(analyze_route(r))
 
         unique_routes = deduplicate_routes(all_routes)
-        unique_routes.sort(key=lambda r: r["elevationGainFt"])
+
+        # Sort by difficulty score (avg grade weighted + max grade weighted)
+        unique_routes.sort(key=lambda r: r["_difficulty"])
 
         if not unique_routes:
             return jsonify({"error": "No routes found"}), 500
 
         min_dist = min(r["distanceInMiles"] for r in unique_routes)
-        min_gain = unique_routes[0]["elevationGainFt"]
         filtered = [r for r in unique_routes
-                    if r["distanceInMiles"] <= min_dist * 3.0
-                    or r["elevationGainFt"] <= min_gain * 0.6]
+                    if r["distanceInMiles"] <= min_dist * 3.0]
+
+        # Remove internal scoring field
+        for r in filtered:
+            r.pop("_difficulty", None)
 
         flat = filtered[0]
         short = min(filtered, key=lambda r: r["distanceInMiles"])
 
-        print(f"✅ Returning {len(filtered)} routes, flattest: {flat['elevationGainFt']}ft")
+        print(f"✅ Returning {len(filtered)} routes, easiest avg grade: {filtered[0]['avgGradePct']}%")
         return jsonify({
             "flatRoute": flat,
             "shortRoute": short,
