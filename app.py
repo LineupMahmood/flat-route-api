@@ -76,17 +76,21 @@ def generate_waypoint_nodes(origin, destination):
     perp_lat = -lng_diff / dist
     perp_lng = lat_diff / dist
 
-    waypoints = [
-        # L-shaped corners
-        (slat, elng),
-        (elat, slng),
-        # Extended corners past destination
-        (slat + lat_diff * 1.5, slng),
-        (slat, slng + lng_diff * 1.5),
-        # Midpoint perpendicular sweeps
-        ((slat+elat)/2 + perp_lat*dist*0.5, (slng+elng)/2 + perp_lng*dist*0.5),
-        ((slat+elat)/2 - perp_lat*dist*0.5, (slng+elng)/2 - perp_lng*dist*0.5),
-    ]
+    waypoints = []
+
+    # L-shaped corners at start lat extended east/west at multiple distances
+    # This forces routes like "go east on Union then south on Octavia"
+    for extend in [1.0, 2.0, 3.0, 4.0]:
+        waypoints.append((slat, slng + lng_diff * extend))   # extend east/west from start
+        waypoints.append((elat, slng + lng_diff * extend))   # extend east/west to dest lat
+        waypoints.append((slat + lat_diff * extend, slng))   # extend north/south from start
+        waypoints.append((slat + lat_diff * extend, elng))   # extend north/south to dest lng
+
+    # Perpendicular sweeps at midpoint
+    for offset in [dist * 0.5, dist * 1.0, -dist * 0.5, -dist * 1.0]:
+        mid_lat = (slat + elat) / 2
+        mid_lng = (slng + elng) / 2
+        waypoints.append((mid_lat + perp_lat * offset, mid_lng + perp_lng * offset))
 
     nodes = []
     for lat, lng in waypoints:
