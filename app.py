@@ -28,7 +28,6 @@ G = ox.load_graphml(filepath=GRAPHML_PATH)
 for u, v, k, data in G.edges(keys=True, data=True):
     grade = float(data.get("grade_abs", 0))
     length = float(data.get("length", 0))
-    # Penalize steep segments exponentially — a 15% grade is much harder than 5%
     data["impedance_high"] = length * (1 + 50  * grade ** 2)
     data["impedance_max"]  = length * (1 + 100 * grade ** 2)
 
@@ -44,7 +43,7 @@ def analyze_route(route):
         edge = edge_data[0] if edge_data else {}
         length = float(edge.get("length", 0))
         grade = float(edge.get("grade", 0))
-        grade_abs = abs(float(edge.get("grade_abs", grade)))
+        grade_abs = abs(float(edge.get("grade_abs", abs(grade))))
         if length * grade > 0:
             total_gain += length * grade
         total_length += length
@@ -53,7 +52,6 @@ def analyze_route(route):
 
     max_grade = max(grades) if grades else 0
     avg_grade = sum(grades) / len(grades) if grades else 0
-
     coords = [{"lat": G.nodes[n]["y"], "lng": G.nodes[n]["x"]} for n in route]
     return {
         "coordinates": coords,
@@ -61,7 +59,6 @@ def analyze_route(route):
         "elevationGainFt": round(total_gain * 3.281, 1),
         "maxGradePct": round(max_grade * 100, 1),
         "avgGradePct": round(avg_grade * 100, 1),
-        # Difficulty score: combo of avg grade and max grade
         "_difficulty": avg_grade * 0.7 + max_grade * 0.3
     }
 
@@ -77,40 +74,81 @@ def get_route_via_waypoint(origin, destination, waypoint_node, weight):
         pass
     return None
 
-def generate_waypoint_nodes(origin, destination):
-    slat, slng = G.nodes[origin]["y"], G.nodes[origin]["x"]
-    elat, elng = G.nodes[destination]["y"], G.nodes[destination]["x"]
-    lat_diff = elat - slat
-    lng_diff = elng - slng
-    dist = math.sqrt(lat_diff**2 + lng_diff**2)
-    if dist == 0:
+def get_flat_waypoint_nodes(origin, destination, radius_factor=3.0):
+    """
+    General solution: find actually flat nodes from the graph within
+    a search radius, then use those as waypoints. Works for any A->B.
+    """
+    slat = G.nodes[origin]["y"]
+    slng = G.nodes[origin]["x"]
+    elat = G.nodes[destination]["y"]
+    elng = G.nodes[destination]["x"]
+
+    # Calculate direct distance in meters
+    direct_dist_m = math.sqrt(
+        ((elat - slat) * 111000) ** 2 +
+        ((elng - slng) * 111000 * math.cos(math.radians(slat))) ** 2
+    )
+
+    # Search radius — larger radius finds more detour options
+    search_radius_m = max(direct_dist_m * radius_factor, 500)
+
+    # Center of search area
+    center_lat = (slat + elat) / 2
+    center_lng = (slng + elng) / 2
+
+    # Find all flat edges within the search radius
+    # A flat edge has grade_abs < 0.04 (4%)
+    flat_nodes = set()
+    for u, v, k, data in G.edges(keys=True, data=True):
+        grade_abs = float(data.get("grade_abs", 1.0))
+        if grade_abs < 0.04:  # Only very flat edges
+            for node in [u, v]:
+                node_lat = G.nodes[node]["y"]
+                node_lng = G.nodes[node]["x"]
+                dist = math.sqrt(
+                    ((node_lat - center_lat) * 111000) ** 2 +
+                    ((node_lng - center_lng) * 111000 * math.cos(math.radians(center_lat))) ** 2
+                )
+                if dist <= search_radius_m:
+                    flat_nodes.add(node)
+
+    # Remove origin and destination
+    flat_nodes.discard(origin)
+    flat_nodes.discard(destination)
+
+    if not flat_nodes:
         return []
 
-    perp_lat = -lng_diff / dist
-    perp_lng = lat_diff / dist
+    # Sample flat nodes spread across the search area
+    # Divide area into a grid and pick the flattest node from each cell
+    grid_size = 5
+    cells = {}
+    for node in flat_nodes:
+        node_lat = G.nodes[node]["y"]
+        node_lng = G.nodes[node]["x"]
+        cell_lat = int((node_lat - slat) / ((elat - slat + 0.001) / grid_size))
+        cell_lng = int((node_lng - slng) / ((elng - slng + 0.001) / grid_size))
+        cell_key = (cell_lat, cell_lng)
+        if cell_key not in cells:
+            cells[cell_key] = node
+        else:
+            # Keep the flatter node
+            existing = cells[cell_key]
+            existing_grade = min(
+                float(G.get_edge_data(existing, nb, 0).get("grade_abs", 1.0))
+                for nb in G.neighbors(existing)
+            ) if list(G.neighbors(existing)) else 1.0
+            new_grade = min(
+                float(G.get_edge_data(node, nb, 0).get("grade_abs", 1.0))
+                for nb in G.neighbors(node)
+            ) if list(G.neighbors(node)) else 1.0
+            if new_grade < existing_grade:
+                cells[cell_key] = node
 
-    waypoints = []
-
-    for extend in [1.0, 2.0, 3.0, 4.0]:
-        waypoints.append((slat, slng + lng_diff * extend))
-        waypoints.append((elat, slng + lng_diff * extend))
-        waypoints.append((slat + lat_diff * extend, slng))
-        waypoints.append((slat + lat_diff * extend, elng))
-
-    for offset in [dist * 0.5, dist * 1.0, -dist * 0.5, -dist * 1.0]:
-        mid_lat = (slat + elat) / 2
-        mid_lng = (slng + elng) / 2
-        waypoints.append((mid_lat + perp_lat * offset, mid_lng + perp_lng * offset))
-
-    nodes = []
-    for lat, lng in waypoints:
-        try:
-            node = ox.distance.nearest_nodes(G, lng, lat)
-            if node not in nodes:
-                nodes.append(node)
-        except:
-            pass
-    return nodes
+    sampled = list(cells.values())
+    print(f"Found {len(flat_nodes)} flat nodes, sampled {len(sampled)} waypoints")
+    return sampled
 
 def deduplicate_routes(routes):
     unique = []
@@ -120,8 +158,10 @@ def deduplicate_routes(routes):
             continue
         mid = coords[len(coords)//2]
         is_dup = any(
-            math.sqrt((mid["lat"]-u["coordinates"][len(u["coordinates"])//2]["lat"])**2 +
-                      (mid["lng"]-u["coordinates"][len(u["coordinates"])//2]["lng"])**2) * 111000 < 40
+            math.sqrt(
+                (mid["lat"] - u["coordinates"][len(u["coordinates"])//2]["lat"]) ** 2 +
+                (mid["lng"] - u["coordinates"][len(u["coordinates"])//2]["lng"]) ** 2
+            ) * 111000 < 50
             for u in unique
         )
         if not is_dup:
@@ -145,37 +185,36 @@ def get_route():
 
         all_routes = []
 
+        # Base routes
         for weight in ["impedance_high", "impedance_max", "length"]:
             r = ox.routing.shortest_path(G, origin, destination, weight=weight)
             if r:
                 all_routes.append(analyze_route(r))
 
-        for wp_node in generate_waypoint_nodes(origin, destination):
+        # Route through actual flat nodes from the graph
+        flat_waypoints = get_flat_waypoint_nodes(origin, destination)
+        for wp_node in flat_waypoints:
             for weight in ["impedance_high", "impedance_max"]:
                 r = get_route_via_waypoint(origin, destination, wp_node, weight)
                 if r:
                     all_routes.append(analyze_route(r))
 
         unique_routes = deduplicate_routes(all_routes)
-
-        # Sort by difficulty score (avg grade weighted + max grade weighted)
         unique_routes.sort(key=lambda r: r["_difficulty"])
 
         if not unique_routes:
             return jsonify({"error": "No routes found"}), 500
 
         min_dist = min(r["distanceInMiles"] for r in unique_routes)
-        filtered = [r for r in unique_routes
-                    if r["distanceInMiles"] <= min_dist * 3.0]
+        filtered = [r for r in unique_routes if r["distanceInMiles"] <= min_dist * 3.0]
 
-        # Remove internal scoring field
         for r in filtered:
             r.pop("_difficulty", None)
 
         flat = filtered[0]
         short = min(filtered, key=lambda r: r["distanceInMiles"])
 
-        print(f"✅ Returning {len(filtered)} routes, easiest avg grade: {filtered[0]['avgGradePct']}%")
+        print(f"✅ Returning {len(filtered)} routes, easiest: avg={filtered[0]['avgGradePct']}%, max={filtered[0]['maxGradePct']}%")
         return jsonify({
             "flatRoute": flat,
             "shortRoute": short,
@@ -183,6 +222,8 @@ def get_route():
         })
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
