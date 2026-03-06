@@ -209,7 +209,7 @@ def get_route():
 
         min_dist = min(r["distanceInMiles"] for r in unique_routes)
         filtered = [r for r in unique_routes
-                    if r["distanceInMiles"] <= min_dist * 2.0
+                    if r["distanceInMiles"] <= min_dist * 2.5
                     and r["maxGradePct"] <= 20.0]
         # Fall back if filters are too aggressive
         if not filtered:
