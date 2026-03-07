@@ -212,10 +212,14 @@ def health():
 @app.route("/route", methods=["GET"])
 def get_route():
     try:
-        start_lat = float(request.args.get("start_lat"))
-        start_lng = float(request.args.get("start_lng"))
-        end_lat = float(request.args.get("end_lat"))
-        end_lng = float(request.args.get("end_lng"))
+        if request.args.get("start") and request.args.get("end"):
+            start_lat, start_lng = map(float, request.args.get("start").split(","))
+            end_lat, end_lng = map(float, request.args.get("end").split(","))
+        else:
+            start_lat = float(request.args.get("start_lat"))
+            start_lng = float(request.args.get("start_lng"))
+            end_lat = float(request.args.get("end_lat"))
+            end_lng = float(request.args.get("end_lng"))
 
         origin = ox.distance.nearest_nodes(G, start_lng, start_lat)
         destination = ox.distance.nearest_nodes(G, end_lng, end_lat)
