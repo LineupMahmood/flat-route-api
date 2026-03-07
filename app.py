@@ -46,6 +46,7 @@ else:
 
 print("Network ready. Server starting...")
 
+
 def analyze_route(route):
     total_gain = 0
     total_length = 0
@@ -128,6 +129,40 @@ def get_local_waypoint_nodes(origin, destination):
                 nodes.append(n)
         except:
             pass
+
+    # Sample flat nodes from the graph within an expanded bounding box
+    padding = (direct_dist_m * 1.5) / 111000
+    min_lat = min(slat, elat) - padding
+    max_lat = max(slat, elat) + padding
+    min_lng = min(slng, elng) - padding
+    max_lng = max(slng, elng) + padding
+
+    flat_candidates = []
+    for node_id, data in G.nodes(data=True):
+        nlat = data.get("y")
+        nlng = data.get("x")
+        if nlat is None or nlng is None:
+            continue
+        if not (min_lat <= nlat <= max_lat and min_lng <= nlng <= max_lng):
+            continue
+        if node_id in (origin, destination):
+            continue
+        # Score this node by average grade of its edges
+        edge_grades = [
+            float(d.get("grade_abs", 0))
+            for _, _, d in G.edges(node_id, data=True)
+        ]
+        if not edge_grades:
+            continue
+        avg_node_grade = sum(edge_grades) / len(edge_grades)
+        flat_candidates.append((avg_node_grade, node_id))
+
+    # Take the 20 flattest nodes as additional waypoint candidates
+    flat_candidates.sort(key=lambda x: x[0])
+    for _, node_id in flat_candidates[:20]:
+        if node_id not in nodes:
+            nodes.append(node_id)
+
     return nodes
 
 def has_loop(route):
