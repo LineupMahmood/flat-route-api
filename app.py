@@ -263,14 +263,51 @@ def get_route():
 
         all_routes = []
 
-        # Base routes
+        # Base routes — direct A to B
         for weight in ["impedance_high", "impedance_max", "length"]:
             r = ox.routing.shortest_path(G, origin, destination, weight=weight)
             if r:
-                if has_backtrack(r, destination):
-                    print(f"⚠️ Skipping backtracking {weight} route")
-                    continue
                 all_routes.append(analyze_route(r))
+
+        # Segmented flat routes — divide trip into 3 segments for geographic coherence
+        # Pick intermediate nodes along the direct line at 33% and 66% progress
+        origin_lat = G.nodes[origin]["y"]
+        origin_lng = G.nodes[origin]["x"]
+        dest_lat = G.nodes[destination]["y"]
+        dest_lng = G.nodes[destination]["x"]
+
+        for weight in ["impedance_high", "impedance_max"]:
+            for fractions in [[0.33, 0.66], [0.25, 0.75], [0.4, 0.6]]:
+                try:
+                    waypoints = []
+                    for f in fractions:
+                        wlat = origin_lat + (dest_lat - origin_lat) * f
+                        wlng = origin_lng + (dest_lng - origin_lng) * f
+                        wnode = ox.distance.nearest_nodes(G, wlng, wlat)
+                        if wnode not in (origin, destination):
+                            waypoints.append(wnode)
+
+                    if len(waypoints) < 2:
+                        continue
+
+                    # Route through each segment
+                    full_route = []
+                    nodes_seq = [origin] + waypoints + [destination]
+                    valid = True
+                    for i in range(len(nodes_seq) - 1):
+                        seg = ox.routing.shortest_path(G, nodes_seq[i], nodes_seq[i+1], weight=weight)
+                        if not seg:
+                            valid = False
+                            break
+                        if full_route:
+                            full_route += seg[1:]
+                        else:
+                            full_route = seg
+
+                    if valid and full_route:
+                        all_routes.append(analyze_route(full_route))
+                except:
+                    pass
 
         unique_routes = deduplicate_routes(all_routes)
         unique_routes.sort(key=lambda r: r["_difficulty"])
