@@ -247,8 +247,9 @@ def get_route():
             return jsonify({"error": "No routes found"}), 500
 
         min_dist = min(r["distanceInMiles"] for r in unique_routes)
+        max_allowed = max(min_dist * 4.0, 1.5)
         filtered = [r for r in unique_routes
-                    if r["distanceInMiles"] <= min_dist * 2.5
+                    if r["distanceInMiles"] <= max_allowed
                     and r["maxGradePct"] <= 20.0]
         # Fall back if filters are too aggressive
         if not filtered:
