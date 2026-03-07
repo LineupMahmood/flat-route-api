@@ -76,7 +76,7 @@ def analyze_route(route):
         "_difficulty": avg_grade * 0.7 + max_grade * 0.3
     }
 
-def has_backtrack(route, destination, threshold=0.25):
+def has_backtrack(route, destination, threshold=1.0):
     """
     Returns True if the route backtracks significantly.
     At any point, if distance to destination increases by more than
