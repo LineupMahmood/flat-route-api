@@ -244,7 +244,7 @@ def health():
             "grade_abs": data.get("grade_abs"),
             "impedance_high": data.get("impedance_high")
         })
-    return {"status": "ok", "version": "v3-hard-constraint", "sample_edges": sample}
+    return {"status": "ok", "version": "v4-backtrack-filter", "sample_edges": sample}
 
 @app.route("/route", methods=["GET"])
 def get_route():
