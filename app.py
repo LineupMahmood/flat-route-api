@@ -232,14 +232,6 @@ def get_route():
             if r:
                 all_routes.append(analyze_route(r))
 
-        # Route through actual flat nodes from the graph
-        flat_waypoints = get_local_waypoint_nodes(origin, destination)
-        for wp_node in flat_waypoints:
-            for weight in ["impedance_high", "impedance_max"]:
-                r = get_route_via_waypoint(origin, destination, wp_node, weight)
-                if r:
-                    all_routes.append(analyze_route(r))
-
         unique_routes = deduplicate_routes(all_routes)
         unique_routes.sort(key=lambda r: r["_difficulty"])
 
