@@ -236,6 +236,7 @@ def get_route():
         # Base routes
         for weight in ["impedance_high", "impedance_max", "length"]:
             r = ox.routing.shortest_path(G, origin, destination, weight=weight)
+            print(f"DEBUG {weight}: {'found ' + str(len(r)) + ' nodes' if r else 'None'}")
             if r:
                 all_routes.append(analyze_route(r))
 
