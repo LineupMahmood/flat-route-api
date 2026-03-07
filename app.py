@@ -24,7 +24,7 @@ if not os.path.exists(GRAPHML_PATH):
 
 import pickle
 
-PICKLE_PATH = "sf_walk_network.pkl"
+PICKLE_PATH = "sf_walk_network_v2.pkl"
 
 print("Loading elevation network...")
 if os.path.exists(PICKLE_PATH):
