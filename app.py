@@ -207,7 +207,7 @@ def deduplicate_routes(routes):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "v3-hard-constraint"}
 
 @app.route("/route", methods=["GET"])
 def get_route():
