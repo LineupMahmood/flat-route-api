@@ -214,12 +214,21 @@ def deduplicate_routes(routes):
             continue
         is_dup = False
         for u in unique:
-            # Same distance within 0.05mi AND same avg grade within 0.5% = duplicate
-            same_dist = abs(r["distanceInMiles"] - u["distanceInMiles"]) < 0.05
-            same_grade = abs(r["avgGradePct"] - u["avgGradePct"]) < 0.5
+            # Must match on distance AND grade AND midpoint to be a duplicate
+            same_dist = abs(r["distanceInMiles"] - u["distanceInMiles"]) < 0.1
+            same_grade = abs(r["avgGradePct"] - u["avgGradePct"]) < 0.3
             if same_dist and same_grade:
-                is_dup = True
-                break
+                # Also verify midpoint proximity before confirming duplicate
+                u_coords = u["coordinates"]
+                mid = len(coords) // 2
+                u_mid = len(u_coords) // 2
+                if mid < len(coords) and u_mid < len(u_coords):
+                    dlat = coords[mid]["lat"] - u_coords[u_mid]["lat"]
+                    dlng = coords[mid]["lng"] - u_coords[u_mid]["lng"]
+                    dist_m = math.sqrt(dlat**2 + dlng**2) * 111000
+                    if dist_m < 100:
+                        is_dup = True
+                        break
             # Also check midpoint proximity
             u_coords = u["coordinates"]
             mid = len(coords) // 2
