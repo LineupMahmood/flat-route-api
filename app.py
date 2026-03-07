@@ -149,7 +149,7 @@ def get_local_waypoint_nodes(origin, destination):
             continue
         # Score this node by average grade of its edges
         edge_grades = [
-            float(d.get("grade_abs", 0))
+            float(d.get("grade_abs") or 0)
             for _, _, d in G.edges(node_id, data=True)
         ]
         if not edge_grades:
