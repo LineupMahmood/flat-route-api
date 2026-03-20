@@ -136,7 +136,39 @@ def analyze_route(path, graph):
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+@app.route("/route_streets")
+def route_streets():
+    try:
+        start_lat = float(request.args.get("start_lat"))
+        start_lng = float(request.args.get("start_lng"))
+        end_lat   = float(request.args.get("end_lat"))
+        end_lng   = float(request.args.get("end_lng"))
 
+        SG = get_subgraph(start_lat, start_lng, end_lat, end_lng)
+        origin      = ox.distance.nearest_nodes(SG, start_lng, start_lat)
+        destination = ox.distance.nearest_nodes(SG, end_lng, end_lat)
+
+        flat_path = nx.dijkstra_path(SG, origin, destination, weight="impedance")
+
+        streets = []
+        for i in range(len(flat_path) - 1):
+            u, v = flat_path[i], flat_path[i+1]
+            ed = SG.get_edge_data(u, v)
+            if ed:
+                edge = list(ed.values())[0]
+                name = edge.get("name", "unnamed")
+                if isinstance(name, list):
+                    name = name[0]
+                streets.append(name)
+
+        from collections import Counter
+        street_counts = Counter(streets)
+        return jsonify({
+            "streets_in_order": streets,
+            "street_summary": dict(street_counts.most_common(10))
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 @app.route("/health")
 def health():
     return {"status": "ok", "version": "v11-distance-constrained"}
