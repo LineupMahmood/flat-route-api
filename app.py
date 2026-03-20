@@ -75,7 +75,7 @@ for u, v, k, data in G.edges(keys=True, data=True):
 
     # Penalty for unnamed edges — prefer named walkable streets
     if not name or str(name).strip() == "":
-        unnamed_penalty = 3.0
+        unnamed_penalty = 8.0
     else:
         unnamed_penalty = 1.0
 
