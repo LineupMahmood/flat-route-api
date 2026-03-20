@@ -65,7 +65,21 @@ for u, v, k, data in G.edges(keys=True, data=True):
     is_arterial_edge = hw in ARTERIAL_HIGHWAY or edge_lanes >= 3
     both_arterial = (u in arterial_nodes and v in arterial_nodes)
     arterial_penalty = 2.5 if (is_arterial_edge or both_arterial) else 1.0
-    data["impedance"] = length * arterial_penalty * (1 + K * excess ** 2)
+
+    # Heavy penalty for Van Ness BRT — unpleasant for walking
+    name = data.get("name", "")
+    if isinstance(name, list):
+        name = name[0] if name else ""
+    if "bus rapid transit" in str(name).lower():
+        arterial_penalty = 10.0
+
+    # Penalty for unnamed edges — prefer named walkable streets
+    if not name or str(name).strip() == "":
+        unnamed_penalty = 3.0
+    else:
+        unnamed_penalty = 1.0
+
+    data["impedance"] = length * arterial_penalty * unnamed_penalty * (1 + K * excess ** 2)
 
 print("Ready.")
 print("Building spatial index...")
