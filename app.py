@@ -203,7 +203,7 @@ def route_streets():
         return jsonify({"error": str(e)}), 500
 @app.route("/health")
 def health():
-    return {"status": "ok", "version": "v11-distance-constrained"}
+    return {"status": "ok", "version": "v12-ellipse-active"}
 
 
 @app.route("/route")
