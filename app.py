@@ -95,13 +95,31 @@ def haversine(a, b):
     return math.sqrt(dlat**2 + dlng**2)
 
 
-def get_subgraph(start_lat, start_lng, end_lat, end_lng, pad=0.02):
-    lat_min = min(start_lat, end_lat) - pad
-    lat_max = max(start_lat, end_lat) + pad
-    lng_min = min(start_lng, end_lng) - pad
-    lng_max = max(start_lng, end_lng) + pad
+def get_subgraph(start_lat, start_lng, end_lat, end_lng, budget_factor=1.25):
+    crow_m = haversine((start_lat, start_lng), (end_lat, end_lng))
+    # Semi-major axis of the ellipse
+    a = (crow_m * budget_factor) / 2
+    # Center of the ellipse
+    center_lat = (start_lat + end_lat) / 2
+    center_lng = (start_lng + end_lng) / 2
+    # Distance from center to each focus
+    c = crow_m / 2
+    # Semi-minor axis
+    b = math.sqrt(max(a**2 - c**2, 1))
+
+    # Angle of the line between start and end
+    dlat = (end_lat - start_lat) * 111000
+    dlng = (end_lng - start_lng) * 111000 * math.cos(math.radians(center_lat))
+    angle = math.atan2(dlng, dlat)
+
+    def inside_ellipse(lat, lng):
+        # Distance from this point to both foci
+        d1 = haversine((lat, lng), (start_lat, start_lng))
+        d2 = haversine((lat, lng), (end_lat, end_lng))
+        return (d1 + d2) <= (crow_m * budget_factor)
+
     nodes = [n for n, (lat, lng) in NODE_POSITIONS.items()
-             if lat_min <= lat <= lat_max and lng_min <= lng <= lng_max]
+             if inside_ellipse(lat, lng)]
     return G.subgraph(nodes).copy()
 
 
