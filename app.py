@@ -17,7 +17,7 @@ if not os.path.exists(GRAPHML_PATH):
             f_out.write(f_in.read())
     os.remove(gz_path)
 
-PICKLE_PATH = "sf_walk_v11.pkl"
+PICKLE_PATH = "sf_walk_v12.pkl"
 print("Loading graph...")
 if os.path.exists(PICKLE_PATH):
     with open(PICKLE_PATH, "rb") as f:
