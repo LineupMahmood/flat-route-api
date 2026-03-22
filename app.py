@@ -131,7 +131,45 @@ def distance_budget(baseline_miles, crow_miles):
     extra = max(0.0, (1.0 - crow_miles) * 0.25)
     return baseline_miles * (1.25 + extra)
 
+def constrained_flat_path(SG, origin, destination, budget_m):
+    """
+    Find the flattest path from origin to destination
+    where total length never exceeds budget_m.
+    Optimizes impedance, prunes on distance.
+    """
+    import heapq
+    # (impedance_cost, distance_m, node, path)
+    heap = [(0.0, 0.0, origin, [origin])]
+    visited = {}
 
+    while heap:
+        imp_cost, dist_cost, node, path = heapq.heappop(heap)
+
+        if node in visited:
+            continue
+        visited[node] = imp_cost
+
+        if node == destination:
+            return path
+
+        for neighbor in SG.neighbors(node):
+            if neighbor in visited:
+                continue
+            ed = SG.get_edge_data(node, neighbor)
+            if not ed:
+                continue
+            edge = min(ed.values(), key=lambda d: float(d.get("impedance", 9999)))
+            edge_length = float(edge.get("length", 0))
+            edge_imp = float(edge.get("impedance", 9999))
+
+            new_dist = dist_cost + edge_length
+            if new_dist > budget_m:
+                continue  # prune — exceeds budget
+
+            new_imp = imp_cost + edge_imp
+            heapq.heappush(heap, (new_imp, new_dist, neighbor, path + [neighbor]))
+
+    return None  # no path found within budget
 def analyze_route(path, graph):
     total_length = 0
     total_gain = 0
@@ -240,8 +278,9 @@ def get_route():
         print(f"Short route: {baseline_miles}mi, avg={short_stats['avgGradePct']}%")
         print(f"Flat budget: {budget_miles:.2f}mi")
 
-        # ── Step 2: Flattest route ─────────────────────────────────────────
-        flat_path = nx.dijkstra_path(SG, origin, destination, weight="impedance")
+       # ── Step 2: Flattest route within budget ──────────────────────────
+        budget_m = budget_miles * 1609.34
+        flat_path = constrained_flat_path(SG, origin, destination, budget_m)
         if not flat_path:
             return jsonify({
                 "singleRoute": short_stats,
