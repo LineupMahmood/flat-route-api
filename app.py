@@ -95,7 +95,7 @@ def haversine(a, b):
     return math.sqrt(dlat**2 + dlng**2)
 
 
-def get_subgraph(start_lat, start_lng, end_lat, end_lng, budget_factor=1.25):
+def get_subgraph(start_lat, start_lng, end_lat, end_lng, budget_factor=2.0):
     crow_m = haversine((start_lat, start_lng), (end_lat, end_lng))
     # Semi-major axis of the ellipse
     a = (crow_m * budget_factor) / 2
@@ -197,7 +197,7 @@ def route_streets():
         origin      = ox.distance.nearest_nodes(SG, start_lng, start_lat)
         destination = ox.distance.nearest_nodes(SG, end_lng, end_lat)
 
-        flat_path = nx.dijkstra_path(SG, origin, destination, weight="impedance")
+        flat_path = parametric_path(SG, origin, destination, alpha=0.0)
 
         streets = []
         for i in range(len(flat_path) - 1):
@@ -269,9 +269,13 @@ def get_route():
             print(f"  α={alpha:.2f}: {stats['distanceInMiles']}mi avg={stats['avgGradePct']}% max={stats['maxGradePct']}%")
             all_routes.append(stats)
 
-        # ── Step 3: Deduplicate ────────────────────────────────────────────
+        # ── Step 3: Deduplicate and filter by 25% distance cap ────────────
+        shortest_dist = all_routes[0]["distanceInMiles"] if all_routes else 0
         unique_routes = []
         for route in all_routes:
+            if route["distanceInMiles"] > shortest_dist * 1.25:
+                print(f"  Skip {route['distanceInMiles']}mi — exceeds 25% budget")
+                continue
             is_dup = any(paths_are_similar(route, u) for u in unique_routes)
             if not is_dup:
                 unique_routes.append(route)
