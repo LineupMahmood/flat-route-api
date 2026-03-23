@@ -131,45 +131,24 @@ def distance_budget(baseline_miles, crow_miles):
     extra = max(0.0, (1.0 - crow_miles) * 0.25)
     return baseline_miles * (1.25 + extra)
 
-def constrained_flat_path(SG, origin, destination, budget_m):
+def parametric_path(SG, origin, destination, alpha):
     """
-    Find the flattest path from origin to destination
-    where total length never exceeds budget_m.
-    Optimizes impedance, prunes on distance.
+    Find path minimizing: alpha × length + (1-alpha) × impedance
+    alpha=1.0 → pure shortest, alpha=0.0 → pure flattest
     """
-    import heapq
-    # (impedance_cost, distance_m, node, path)
-    heap = [(0.0, 0.0, origin, [origin])]
-    visited = {}
+    for u, v, k, data in SG.edges(keys=True, data=True):
+        data["combined"] = alpha * float(data.get("length", 0)) + (1 - alpha) * float(data.get("impedance", 0))
+    try:
+        return nx.dijkstra_path(SG, origin, destination, weight="combined")
+    except:
+        return None
 
-    while heap:
-        imp_cost, dist_cost, node, path = heapq.heappop(heap)
 
-        if node in visited:
-            continue
-        visited[node] = imp_cost
-
-        if node == destination:
-            return path
-
-        for neighbor in SG.neighbors(node):
-            if neighbor in visited:
-                continue
-            ed = SG.get_edge_data(node, neighbor)
-            if not ed:
-                continue
-            edge = min(ed.values(), key=lambda d: float(d.get("impedance", 9999)))
-            edge_length = float(edge.get("length", 0))
-            edge_imp = float(edge.get("impedance", 9999))
-
-            new_dist = dist_cost + edge_length
-            if new_dist > budget_m:
-                continue  # prune — exceeds budget
-
-            new_imp = imp_cost + edge_imp
-            heapq.heappush(heap, (new_imp, new_dist, neighbor, path + [neighbor]))
-
-    return None  # no path found within budget
+def paths_are_similar(stats_a, stats_b, dist_threshold=0.05, grade_threshold=0.3):
+    """Two routes are duplicates if distance and grade are both within threshold."""
+    same_dist  = abs(stats_a["distanceInMiles"] - stats_b["distanceInMiles"]) < dist_threshold
+    same_grade = abs(stats_a["avgGradePct"]     - stats_b["avgGradePct"])     < grade_threshold
+    return same_dist and same_grade
 def analyze_route(path, graph):
     total_length = 0
     total_gain = 0
@@ -278,45 +257,50 @@ def get_route():
         print(f"Short route: {baseline_miles}mi, avg={short_stats['avgGradePct']}%")
         print(f"Flat budget: {budget_miles:.2f}mi")
 
-       # ── Step 2: Flattest route within budget ──────────────────────────
-        budget_m = budget_miles * 1609.34
-        flat_path = constrained_flat_path(SG, origin, destination, budget_m)
-        if not flat_path:
+       # ── Step 2: Pareto frontier — 4 alpha values ──────────────────────
+        alphas = [1.0, 0.67, 0.33, 0.0]
+        all_routes = []
+
+        for alpha in alphas:
+            path = parametric_path(SG, origin, destination, alpha)
+            if not path:
+                continue
+            stats = analyze_route(path, SG)
+            print(f"  α={alpha:.2f}: {stats['distanceInMiles']}mi avg={stats['avgGradePct']}% max={stats['maxGradePct']}%")
+            all_routes.append(stats)
+
+        # ── Step 3: Deduplicate ────────────────────────────────────────────
+        unique_routes = []
+        for route in all_routes:
+            is_dup = any(paths_are_similar(route, u) for u in unique_routes)
+            if not is_dup:
+                unique_routes.append(route)
+
+        print(f"  Unique routes: {len(unique_routes)}")
+
+        if len(unique_routes) == 1:
             return jsonify({
-                "singleRoute": short_stats,
-                "message": "Only one route found for this trip.",
-            })
-
-        flat_stats = analyze_route(flat_path, SG)
-        flat_miles = flat_stats["distanceInMiles"]
-
-        print(f"Flat route: {flat_miles}mi, avg={flat_stats['avgGradePct']}%")
-
-        # ── Step 3: Are they the same route? ──────────────────────────────
-        if abs(flat_miles - baseline_miles) <= 0.05:
-            print("Routes are effectively identical — returning single route")
-            return jsonify({
-                "singleRoute": short_stats,
+                "singleRoute": unique_routes[0],
                 "message": "The shortest and flattest routes are the same for this trip.",
             })
 
-        # ── Step 4: Is flat route within budget? ──────────────────────────
-        grade_saved = round(short_stats["avgGradePct"] - flat_stats["avgGradePct"], 1)
-        distance_added = round(flat_miles - baseline_miles, 2)
+        # ── Step 4: Label and return ───────────────────────────────────────
+        labels = ["route1", "route2", "route3", "route4"]
+        response = {}
+        for i, route in enumerate(unique_routes):
+            response[labels[i]] = route
 
-        if flat_miles <= budget_miles:
-            print(f"Flat route within budget — returning both")
-            return jsonify({
-                "shortRoute": short_stats,
-                "flatRoute":  flat_stats,
-                "message": f"Flat route adds {distance_added}mi but reduces average grade by {grade_saved}%.",
-            })
+        shortest = unique_routes[0]
+        flattest = unique_routes[-1]
+        grade_saved = round(shortest["avgGradePct"] - flattest["avgGradePct"], 1)
+        dist_added  = round(flattest["distanceInMiles"] - shortest["distanceInMiles"], 2)
+
+        if grade_saved > 0:
+            response["message"] = f"Gentlest option saves {grade_saved}% avg grade, adds {dist_added}mi."
         else:
-            print(f"Flat route too long ({flat_miles:.2f}mi > budget {budget_miles:.2f}mi) — returning short only")
-            return jsonify({
-                "singleRoute": short_stats,
-                "message": "No flatter route found within a reasonable distance for this trip.",
-            })
+            response["message"] = "All routes have similar grades for this trip."
+
+        return jsonify(response)
 
     except Exception as e:
         import traceback
